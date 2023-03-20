@@ -2,6 +2,7 @@ import { DataTypes, Model } from 'sequelize';
 import { createSequelize6Instance } from '../setup/create-sequelize-instance';
 import { expect } from 'chai';
 import sinon from 'sinon';
+import { IndexHints } from '@sequelize/core';
 
 // if your issue is dialect specific, remove the dialects you don't need to test on.
 export const testingOnDialects = new Set(['mssql', 'sqlite', 'mysql', 'mariadb', 'postgres', 'postgres-native']);
@@ -21,21 +22,88 @@ export async function run() {
     },
   });
 
-  class Foo extends Model {}
+  /**
+   * Model Movie
+   */
+  class Movie extends Model { }
 
-  Foo.init({
-    name: DataTypes.TEXT,
+  Movie.init({
+    id: {
+      type: DataTypes.INTEGER,
+      autoIncrement: true,
+      primaryKey: true,
+    },
+    title: DataTypes.CHAR({ length: 50 }),
   }, {
     sequelize,
-    modelName: 'Foo',
+    modelName: 'Movie',
+    indexes: [
+      {
+        name: 'testIndex',
+        fields: ['title'],
+      },
+    ],
   });
 
-  // You can use sinon and chai assertions directly in your SSCCE.
-  const spy = sinon.spy();
-  sequelize.afterBulkSync(() => spy());
-  await sequelize.sync({ force: true });
-  expect(spy).to.have.been.called;
 
-  console.log(await Foo.create({ name: 'TS foo' }));
-  expect(await Foo.count()).to.equal(1);
+  /**
+   * Model Actor
+   */
+  class Actor extends Model { }
+
+  Actor.init({
+    id: {
+      type: DataTypes.INTEGER,
+      autoIncrement: true,
+      primaryKey: true,
+    },
+    name: DataTypes.CHAR({ length: 50 }),
+  }, {
+    sequelize,
+    modelName: 'Actor',
+    indexes: [],
+  });
+
+  /**
+   * Associations
+  */
+  Movie.hasMany(Actor);
+  Actor.belongsTo(Movie);
+
+  await sequelize.sync({ force: true });
+
+
+  // Create movie
+  await Movie.create({
+    title: 'Movie title',
+  });
+
+  // Create actor and associate with movie
+  await Actor.create({
+    name: 'Actor name',
+    // @ts-ignore
+    MovieId: movieRes.id,
+  });
+
+  /**
+   * This will cause an error.
+   * Sequelize attempts to make a USE INDEX in the Actors query.
+   *
+   * SELECT `Movie`.`id`, `Movie`.`title`
+   *    FROM `Movies` AS `Movie` USE INDEX (`testIndex`);
+   *
+   * SELECT `id`, `name`, `MovieId`
+   *    FROM `Actors` AS `Actor` USE INDEX (`testIndex`)
+   *    WHERE `Actor`.`MovieId` IN (1);
+   */
+  await Movie.findAll({
+    indexHints: [{
+      type: IndexHints.USE,
+      values: ['testIndex'],
+    }],
+    include: [{
+      separate: true,
+      model: Actor,
+    }]
+  });
 }
